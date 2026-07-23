@@ -43,13 +43,24 @@ def main():
     upcoming["confidence"] = upcoming["home_win_prob"].apply(lambda p: max(p, 1 - p))
 
     out = upcoming[[
-        "season", "week", "game_type", "gameday", "weekday", "gametime", "home_team", "away_team",
-        "home_win_prob", "pred_margin", "favorite", "confidence"
+        "game_id", "season", "week", "game_type", "gameday", "weekday", "gametime", "home_team", "away_team",
+        "home_win_prob", "pred_margin", "favorite", "confidence",
+        "home_qb_name_presumed", "away_qb_name_presumed",
+        "home_qb_confirmed", "away_qb_confirmed",
+        "home_qb_elo_pre", "away_qb_elo_pre",
     ]].sort_values(["season", "week", "gameday"])
 
     out["home_win_prob"] = out["home_win_prob"].round(3)
     out["pred_margin"] = out["pred_margin"].round(1)
     out["confidence"] = out["confidence"].round(3)
+    out["home_qb_elo_pre"] = out["home_qb_elo_pre"].round(0)
+    out["away_qb_elo_pre"] = out["away_qb_elo_pre"].round(0)
+    out = out.rename(columns={
+        "home_qb_name_presumed": "home_qb_name",
+        "away_qb_name_presumed": "away_qb_name",
+        "home_qb_elo_pre": "home_qb_elo",
+        "away_qb_elo_pre": "away_qb_elo",
+    })
 
     pd.set_option("display.max_rows", None)
     pd.set_option("display.width", 140)

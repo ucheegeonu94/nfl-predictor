@@ -5,6 +5,8 @@ features.csv
 predictions.csv
 predictions.json
 metrics.json
+injuries.json
+weather.json
 nfl_predictions.html
 model_win.joblib
 model_margin.joblib

@@ -18,6 +18,9 @@
     --conf2-bg: #E4F0E7; --conf2-fg: #14532F;
     --conf3-bg: #1F6F4A; --conf3-fg: #FFFFFF;
     --conf4-bg: #14532F; --conf4-fg: #FFFFFF;
+    --status-warning-bg: #FDF3D8; --status-warning-fg: #7A5A0F;
+    --status-serious-bg: #FBE4D5; --status-serious-fg: #8A3A10;
+    --status-critical-bg: #FBDADA; --status-critical-fg: #961D1D;
     color-scheme: light;
   }
   @media (prefers-color-scheme: dark) {
@@ -39,6 +42,9 @@
       --conf2-bg: #1E3327; --conf2-fg: #7CEBAA;
       --conf3-bg: #2A9D64; --conf3-fg: #0A0F0C;
       --conf4-bg: #7CEBAA; --conf4-fg: #0A0F0C;
+      --status-warning-bg: #332A11; --status-warning-fg: #E8C767;
+      --status-serious-bg: #331D10; --status-serious-fg: #F0996B;
+      --status-critical-bg: #331414; --status-critical-fg: #F28B8B;
       color-scheme: dark;
     }
   }
@@ -51,6 +57,9 @@
     --conf2-bg: #1E3327; --conf2-fg: #7CEBAA;
     --conf3-bg: #2A9D64; --conf3-fg: #0A0F0C;
     --conf4-bg: #7CEBAA; --conf4-fg: #0A0F0C;
+    --status-warning-bg: #332A11; --status-warning-fg: #E8C767;
+    --status-serious-bg: #331D10; --status-serious-fg: #F0996B;
+    --status-critical-bg: #331414; --status-critical-fg: #F28B8B;
     color-scheme: dark;
   }
   :root[data-theme="light"] {
@@ -62,6 +71,9 @@
     --conf2-bg: #E4F0E7; --conf2-fg: #14532F;
     --conf3-bg: #1F6F4A; --conf3-fg: #FFFFFF;
     --conf4-bg: #14532F; --conf4-fg: #FFFFFF;
+    --status-warning-bg: #FDF3D8; --status-warning-fg: #7A5A0F;
+    --status-serious-bg: #FBE4D5; --status-serious-fg: #8A3A10;
+    --status-critical-bg: #FBDADA; --status-critical-fg: #961D1D;
     color-scheme: light;
   }
 
@@ -130,11 +142,17 @@
     margin-bottom: 8px; font-weight: 600;
   }
   .matchup { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
-  .team { display: flex; flex-direction: column; }
-  .team .abbr { font-size: 20px; font-weight: 800; letter-spacing: -0.01em; }
-  .team .name { font-size: 10.5px; color: var(--ink-muted); font-weight: 600; }
-  .team.away { text-align: left; }
-  .team.home { text-align: right; }
+  .team-btn {
+    display: flex; flex-direction: column; background: none; border: none; padding: 4px 6px;
+    margin: -4px -6px; border-radius: 8px; cursor: pointer; font-family: inherit; color: inherit;
+    -webkit-tap-highlight-color: transparent;
+  }
+  .team-btn:hover { background: var(--surface-2); }
+  .team-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+  .team-btn .abbr { font-size: 20px; font-weight: 800; letter-spacing: -0.01em; }
+  .team-btn .name { font-size: 10.5px; color: var(--ink-muted); font-weight: 600; }
+  .team-btn.away { text-align: left; align-items: flex-start; }
+  .team-btn.home { text-align: right; align-items: flex-end; }
   .at { font-size: 11px; color: var(--ink-muted); font-weight: 700; }
 
   .bar-row { margin-top: 10px; }
@@ -162,6 +180,74 @@
   footer strong { color: var(--ink-secondary); }
 
   .empty { text-align: center; padding: 40px 20px; color: var(--ink-muted); font-size: 13px; }
+
+  /* team detail sheet */
+  .sheet-backdrop {
+    position: fixed; inset: 0; background: rgba(0,0,0,0.45); z-index: 90;
+    opacity: 0; pointer-events: none; transition: opacity 0.18s ease;
+  }
+  .sheet-backdrop.open { opacity: 1; pointer-events: auto; }
+  .sheet {
+    position: fixed; left: 0; right: 0; bottom: 0; z-index: 91;
+    background: var(--surface); border-top: 1px solid var(--border);
+    border-radius: 16px 16px 0 0; box-shadow: 0 -4px 24px rgba(0,0,0,0.2);
+    max-width: 620px; margin: 0 auto;
+    max-height: 82vh; overflow-y: auto;
+    transform: translateY(100%); transition: transform 0.22s ease;
+    padding: 10px 18px 24px 18px;
+  }
+  .sheet.open { transform: translateY(0); }
+  @media (prefers-reduced-motion: reduce) {
+    .sheet, .sheet-backdrop { transition: none; }
+  }
+  .sheet-handle { width: 36px; height: 4px; border-radius: 999px; background: var(--border); margin: 6px auto 14px auto; }
+  .sheet-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 4px; }
+  .sheet-head h2 { font-size: 20px; font-weight: 800; margin: 0; letter-spacing: -0.01em; }
+  .sheet-head .sub { font-size: 11.5px; color: var(--ink-muted); font-weight: 600; margin-top: 2px; }
+  .sheet-close {
+    background: var(--surface-2); border: 1px solid var(--border); border-radius: 999px;
+    width: 30px; height: 30px; font-size: 15px; line-height: 1; cursor: pointer; color: var(--ink-secondary);
+    flex: 0 0 auto;
+  }
+  .sheet-close:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+
+  .sheet-section { margin-top: 18px; }
+  .sheet-section h3 {
+    font-size: 11px; font-weight: 800; text-transform: uppercase; letter-spacing: 0.05em;
+    color: var(--ink-muted); margin: 0 0 8px 0;
+  }
+  .sheet-section .note { font-size: 12px; color: var(--ink-muted); line-height: 1.5; }
+
+  .qb-row { margin-bottom: 10px; }
+  .qb-row:last-child { margin-bottom: 0; }
+  .qb-row .qb-label { display: flex; justify-content: space-between; font-size: 12.5px; font-weight: 700; margin-bottom: 4px; }
+  .qb-row .qb-label .presumed { font-weight: 600; color: var(--ink-muted); font-size: 10.5px; text-transform: none; letter-spacing: 0; }
+  .qb-meter { height: 8px; border-radius: 999px; background: var(--surface-2); border: 1px solid var(--border); overflow: hidden; }
+  .qb-meter .fill { height: 100%; border-radius: 999px; }
+  .qb-meter .fill.home { background: var(--accent); }
+  .qb-meter .fill.away { background: var(--away); }
+
+  .injury-list { display: flex; flex-direction: column; gap: 6px; }
+  .injury-row {
+    display: flex; align-items: center; justify-content: space-between; gap: 8px;
+    padding: 8px 10px; background: var(--surface-2); border-radius: 8px; font-size: 12.5px;
+  }
+  .injury-row .who { font-weight: 700; }
+  .injury-row .what { color: var(--ink-muted); font-weight: 600; font-size: 11px; }
+  .status-pill {
+    font-size: 10px; font-weight: 800; padding: 3px 8px; border-radius: 999px; white-space: nowrap;
+    letter-spacing: 0.02em;
+  }
+  .status-pill.questionable { background: var(--status-warning-bg); color: var(--status-warning-fg); }
+  .status-pill.doubtful { background: var(--status-serious-bg); color: var(--status-serious-fg); }
+  .status-pill.out { background: var(--status-critical-bg); color: var(--status-critical-fg); }
+
+  .weather-row { display: flex; gap: 10px; }
+  .weather-tile {
+    flex: 1; background: var(--surface-2); border-radius: 10px; padding: 10px; text-align: center;
+  }
+  .weather-tile .v { font-size: 17px; font-weight: 800; }
+  .weather-tile .k { font-size: 9.5px; color: var(--ink-muted); font-weight: 700; text-transform: uppercase; letter-spacing: 0.03em; margin-top: 2px; }
 </style>
 
 <header class="top">
@@ -181,13 +267,28 @@
 
 <footer>
   <strong>How this works.</strong> Predictions come from a gradient-boosted model (XGBoost) trained on 1999–2025 NFL games —
-  Elo ratings, rolling offensive/defensive EPA-per-play efficiency, QB-continuity signals, rest days, and matchup context.
-  Backtested accuracy above is on held-out seasons the model never trained on. Early-season weeks lean more on the prior
-  season's data since there's little current-season form yet. This is a snapshot generated at build time, not a live feed —
-  ask for a refresh as the season progresses. For fun and analysis, not betting advice.
+  Elo ratings, rolling offensive/defensive EPA-per-play efficiency, QB-specific Elo, QB-continuity signals, rest days, and
+  matchup context. Backtested accuracy above is on held-out seasons the model never trained on. Early-season weeks lean more
+  on the prior season's data since there's little current-season form yet. This is a snapshot generated at build time, not a
+  live feed — ask for a refresh as the season progresses. For fun and analysis, not betting advice.
 </footer>
 
+<div class="sheet-backdrop" id="sheet-backdrop"></div>
+<div class="sheet" id="sheet" role="dialog" aria-modal="true" aria-labelledby="sheet-title" tabindex="-1">
+  <div class="sheet-handle"></div>
+  <div class="sheet-head">
+    <div>
+      <h2 id="sheet-title"></h2>
+      <div class="sub" id="sheet-sub"></div>
+    </div>
+    <button type="button" class="sheet-close" id="sheet-close" aria-label="Close">✕</button>
+  </div>
+  <div id="sheet-body"></div>
+</div>
+
 <script id="game-data" type="application/json">__DATA_JSON__</script>
+<script id="injuries-data" type="application/json">__INJURIES_JSON__</script>
+<script id="weather-data" type="application/json">__WEATHER_JSON__</script>
 <script>
 (function () {
   const TEAM_NAMES = {
@@ -203,6 +304,10 @@
 
   const games = JSON.parse(document.getElementById("game-data").textContent);
   games.sort((a, b) => (a.gameday + a.gametime).localeCompare(b.gameday + b.gametime));
+  const gamesById = Object.fromEntries(games.map(g => [g.game_id, g]));
+
+  const INJURIES = JSON.parse(document.getElementById("injuries-data").textContent);
+  const WEATHER = JSON.parse(document.getElementById("weather-data").textContent);
 
   const weeks = [...new Set(games.map(g => g.week))].sort((a, b) => a - b);
 
@@ -252,15 +357,15 @@
           <span>${weekLabel(g)}</span>
         </div>
         <div class="matchup">
-          <div class="team away">
+          <button type="button" class="team-btn away" data-game-id="${g.game_id}" data-team="${g.away_team}">
             <span class="abbr">${g.away_team}</span>
             <span class="name">${TEAM_NAMES[g.away_team] || ''}</span>
-          </div>
+          </button>
           <span class="at">@</span>
-          <div class="team home">
+          <button type="button" class="team-btn home" data-game-id="${g.game_id}" data-team="${g.home_team}">
             <span class="abbr">${g.home_team}</span>
             <span class="name">${TEAM_NAMES[g.home_team] || ''}</span>
-          </div>
+          </button>
         </div>
         <div class="bar-row">
           <div class="bar">
@@ -320,6 +425,117 @@
     render(w);
     window.scrollTo({ top: 0, behavior: 'auto' });
   }
+
+  // --- team detail sheet: QB Elo, injury report, game weather ---
+  let lastFocused = null;
+
+  function qbMeterHTML(label, side, name, elo, confirmed) {
+    // fixed display domain for the meter fill -- a visual scale, not a probability
+    const MIN = 1350, MAX = 1650;
+    const pct = Math.max(4, Math.min(100, ((elo - MIN) / (MAX - MIN)) * 100));
+    return `
+      <div class="qb-row">
+        <div class="qb-label">
+          <span>${label}: ${name}${confirmed ? '' : ' <span class="presumed">(presumed starter)</span>'}</span>
+          <span class="num">${Math.round(elo)}</span>
+        </div>
+        <div class="qb-meter"><div class="fill ${side}" style="width:${pct}%"></div></div>
+      </div>`;
+  }
+
+  function injuryRowHTML(p) {
+    const cls = (p.status || '').toLowerCase();
+    return `
+      <div class="injury-row">
+        <div>
+          <div class="who">${p.name}</div>
+          <div class="what">${p.position}${p.injury ? ' · ' + p.injury : ''}</div>
+        </div>
+        <span class="status-pill ${cls}">${p.status}</span>
+      </div>`;
+  }
+
+  function injurySectionHTML(team) {
+    if (!INJURIES.as_of_week) {
+      return `<div class="note">Injury reports haven't started yet this season -- they're published once official weekly practice reports begin.</div>`;
+    }
+    const data = INJURIES.teams && INJURIES.teams[team];
+    if (!data || !data.players.length) {
+      return `<div class="note">No players currently listed on the injury report (as of Week ${INJURIES.as_of_week}).</div>`;
+    }
+    return `
+      <div class="note" style="margin-bottom:8px;">As of Week ${data.week}</div>
+      <div class="injury-list">${data.players.map(injuryRowHTML).join('')}</div>`;
+  }
+
+  function weatherSectionHTML(gameId) {
+    const w = WEATHER[gameId];
+    if (!w) return `<div class="note">Not available.</div>`;
+    if (w.type === 'indoor') return `<div class="note">🏟️ Indoor — roof closed, weather won't be a factor.</div>`;
+    if (w.type === 'neutral_site') return `<div class="note">🌍 International/neutral-site venue — forecast not tracked for this game.</div>`;
+    if (w.type === 'too_far_out') return `<div class="note">📅 Forecast becomes available roughly 15 days before kickoff.</div>`;
+    if (w.type === 'forecast') {
+      return `
+        <div class="weather-row">
+          <div class="weather-tile"><div class="v num">${Math.round(w.temp_high_f)}°/${Math.round(w.temp_low_f)}°</div><div class="k">High / Low</div></div>
+          <div class="weather-tile"><div class="v num">${Math.round(w.wind_mph)} mph</div><div class="k">Wind</div></div>
+          <div class="weather-tile"><div class="v num">${Math.round(w.precip_pct)}%</div><div class="k">Precip</div></div>
+        </div>`;
+    }
+    return `<div class="note">Not available.</div>`;
+  }
+
+  function openSheet(team, gameId) {
+    const g = gamesById[gameId];
+    if (!g) return;
+    const isHome = g.home_team === team;
+    const oppTeam = isHome ? g.away_team : g.home_team;
+    const relation = isHome ? 'vs' : 'at';
+
+    document.getElementById('sheet-title').textContent = `${team} — ${TEAM_NAMES[team] || ''}`;
+    document.getElementById('sheet-sub').textContent = `${weekLabel(g)} · ${relation} ${oppTeam}`;
+
+    document.getElementById('sheet-body').innerHTML = `
+      <div class="sheet-section">
+        <h3>Starting QB</h3>
+        ${qbMeterHTML(g.away_team, 'away', g.away_qb_name, g.away_qb_elo, g.away_qb_confirmed)}
+        ${qbMeterHTML(g.home_team, 'home', g.home_qb_name, g.home_qb_elo, g.home_qb_confirmed)}
+        <div class="note" style="margin-top:8px;">Team-adjusted rating from offensive EPA/play while each QB starts. League average = 1500.</div>
+      </div>
+      <div class="sheet-section">
+        <h3>${team} Injury Report</h3>
+        ${injurySectionHTML(team)}
+      </div>
+      <div class="sheet-section">
+        <h3>Game Weather</h3>
+        ${weatherSectionHTML(gameId)}
+      </div>
+    `;
+
+    document.getElementById('sheet').classList.add('open');
+    document.getElementById('sheet-backdrop').classList.add('open');
+    document.body.style.overflow = 'hidden';
+    lastFocused = document.activeElement;
+    document.getElementById('sheet-close').focus();
+  }
+
+  function closeSheet() {
+    document.getElementById('sheet').classList.remove('open');
+    document.getElementById('sheet-backdrop').classList.remove('open');
+    document.body.style.overflow = '';
+    if (lastFocused && lastFocused.focus) lastFocused.focus();
+  }
+
+  document.getElementById('main').addEventListener('click', (e) => {
+    const btn = e.target.closest('.team-btn');
+    if (!btn) return;
+    openSheet(btn.dataset.team, btn.dataset.gameId);
+  });
+  document.getElementById('sheet-backdrop').addEventListener('click', closeSheet);
+  document.getElementById('sheet-close').addEventListener('click', closeSheet);
+  document.addEventListener('keydown', (e) => {
+    if (e.key === 'Escape' && document.getElementById('sheet').classList.contains('open')) closeSheet();
+  });
 
   // default: earliest week that hasn't fully kicked off yet, based on viewer's local clock
   const now = new Date();

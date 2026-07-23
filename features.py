@@ -12,6 +12,8 @@ knowable *before kickoff* (no leakage from the game's own result):
     data, see build_epa.py) over each team's last 5 and 10 games.
   - QB continuity: whether the starting QB changed from that team's last game,
     and the starter's career start count (experience proxy).
+  - QB-specific Elo: a per-QB rating (EWMA of the team's offensive EPA/play in
+    games that QB started), capturing QB *quality* rather than just stability.
   - Rest days for each team (from the source data).
   - Divisional-game flag.
   - Season week.
@@ -30,6 +32,10 @@ EPA_PATH = "team_game_epa.csv"
 ELO_START = 1500.0
 ELO_K = 20.0
 ELO_HOME_ADV = 55.0  # elo points added to home team's rating pre-game
+
+QB_ELO_START = 1500.0
+QB_ELO_ALPHA = 0.18   # EWMA weight per start -- higher = faster-reacting rating
+QB_ELO_SCALE = 600.0  # elo points per unit of offensive EPA/play
 
 
 def load_raw():
@@ -159,12 +165,14 @@ def compute_qb_features(df):
     """
     long_rows = []
     for _, row in df.iterrows():
-        long_rows.append({"team": row["home_team"], "gameday": row["gameday"], "game_id": row["game_id"], "qb_id": row["home_qb_id"]})
-        long_rows.append({"team": row["away_team"], "gameday": row["gameday"], "game_id": row["game_id"], "qb_id": row["away_qb_id"]})
+        long_rows.append({"team": row["home_team"], "gameday": row["gameday"], "game_id": row["game_id"], "qb_id": row["home_qb_id"], "qb_name": row["home_qb_name"]})
+        long_rows.append({"team": row["away_team"], "gameday": row["gameday"], "game_id": row["game_id"], "qb_id": row["away_qb_id"], "qb_name": row["away_qb_name"]})
     long_df = pd.DataFrame(long_rows).sort_values(["team", "gameday"])
 
     # assume continuity for games with unknown starter (future schedule)
     long_df["qb_id_filled"] = long_df.groupby("team")["qb_id"].ffill()
+    long_df["qb_name_presumed"] = long_df.groupby("team")["qb_name"].ffill()
+    long_df["qb_confirmed"] = long_df["qb_id"].notna().astype(int)
 
     prev_qb = long_df.groupby("team")["qb_id_filled"].shift(1)
     long_df["qb_change"] = ((long_df["qb_id_filled"] != prev_qb) & prev_qb.notna()).astype(int)
@@ -177,7 +185,7 @@ def compute_qb_features(df):
     long_df["qb_starts_career"] = long_df["qb_starts_career"].fillna(0)
     long_df = long_df.sort_values(["team", "gameday"])
 
-    feat_cols = ["qb_change", "qb_starts_career"]
+    feat_cols = ["qb_change", "qb_starts_career", "qb_name_presumed", "qb_confirmed"]
     home_feats = long_df[["game_id", "team"] + feat_cols].rename(
         columns={c: f"home_{c}" for c in feat_cols} | {"team": "home_team"}
     )
@@ -190,12 +198,64 @@ def compute_qb_features(df):
     return df
 
 
+def compute_qb_elo(df):
+    """QB-specific rating, distinct from qb_change/qb_starts_career: those
+    capture *stability*, this captures *quality*. It's an EWMA of the team's
+    offensive EPA-per-play in games this specific QB started, rescaled onto
+    an Elo-like number so it reads on the same footing as team Elo.
+
+    New/never-seen QBs start at the neutral prior (1500) and drift from
+    there as they accumulate starts -- there's no draft-pedigree prior here
+    (unlike 538's model, which seeds rookies by draft position), so a rookie
+    reads as exactly average until his own play says otherwise. Computed
+    sequentially in date order using only each QB's own starts strictly
+    before the current game -- no leakage.
+    """
+    epa = pd.read_csv(EPA_PATH)
+
+    long_rows = []
+    for _, row in df.iterrows():
+        long_rows.append({"team": row["home_team"], "gameday": row["gameday"], "game_id": row["game_id"], "qb_id": row["home_qb_id"]})
+        long_rows.append({"team": row["away_team"], "gameday": row["gameday"], "game_id": row["game_id"], "qb_id": row["away_qb_id"]})
+    long_df = pd.DataFrame(long_rows).sort_values(["team", "gameday"])
+    long_df["qb_id_filled"] = long_df.groupby("team")["qb_id"].ffill()
+    long_df = long_df.merge(epa[["game_id", "team", "off_epa_per_play"]], on=["game_id", "team"], how="left")
+    long_df = long_df.sort_values("gameday").reset_index(drop=True)
+
+    ratings = {}
+    pre_elo = np.full(len(long_df), QB_ELO_START)
+    for i, row in long_df.iterrows():
+        qb = row["qb_id_filled"]
+        if pd.isna(qb):
+            continue
+        rating = ratings.get(qb, QB_ELO_START)
+        pre_elo[i] = rating
+        epa_val = row["off_epa_per_play"]
+        if pd.notna(epa_val):
+            ratings[qb] = (1 - QB_ELO_ALPHA) * rating + QB_ELO_ALPHA * (QB_ELO_START + QB_ELO_SCALE * epa_val)
+
+    long_df["qb_elo_pre"] = pre_elo
+
+    home_feats = long_df[["game_id", "team", "qb_elo_pre"]].rename(
+        columns={"qb_elo_pre": "home_qb_elo_pre", "team": "home_team"}
+    )
+    away_feats = long_df[["game_id", "team", "qb_elo_pre"]].rename(
+        columns={"qb_elo_pre": "away_qb_elo_pre", "team": "away_team"}
+    )
+
+    df = df.merge(home_feats, on=["game_id", "home_team"], how="left")
+    df = df.merge(away_feats, on=["game_id", "away_team"], how="left")
+    df["qb_elo_diff"] = df["home_qb_elo_pre"] - df["away_qb_elo_pre"]
+    return df
+
+
 def build_features():
     df = load_raw()
     df = compute_elo(df)
     df = compute_rolling_form(df)
     df = compute_rolling_epa(df)
     df = compute_qb_features(df)
+    df = compute_qb_elo(df)
 
     df["rest_diff"] = df["home_rest"] - df["away_rest"]
     df["div_game"] = df["div_game"].fillna(0).astype(int)
@@ -212,6 +272,13 @@ def build_features():
         df[c] = df[c].fillna(0).astype(int)
     for c in ["home_qb_starts_career", "away_qb_starts_career"]:
         df[c] = df[c].fillna(0)
+    for c in ["home_qb_confirmed", "away_qb_confirmed"]:
+        df[c] = df[c].fillna(0).astype(int)
+    for c in ["home_qb_name_presumed", "away_qb_name_presumed"]:
+        df[c] = df[c].fillna("TBD")
+    for c in ["home_qb_elo_pre", "away_qb_elo_pre"]:
+        df[c] = df[c].fillna(QB_ELO_START)
+    df["qb_elo_diff"] = df["qb_elo_diff"].fillna(0.0)
 
     df["home_win"] = np.where(
         df["home_score"] > df["away_score"], 1,
@@ -234,6 +301,7 @@ FEATURE_COLS = [
     "home_def_success_rate_10", "away_def_success_rate_10",
     "home_qb_change", "away_qb_change",
     "home_qb_starts_career", "away_qb_starts_career",
+    "home_qb_elo_pre", "away_qb_elo_pre", "qb_elo_diff",
     "rest_diff", "div_game", "week",
 ]
 
