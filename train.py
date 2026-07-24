@@ -55,6 +55,7 @@ def main():
         min_child_weight=5,
         eval_metric="logloss",
         early_stopping_rounds=40,
+        random_state=42,
     )
     clf.fit(X_train, y_train, eval_set=[(X_val, y_val)], verbose=False)
     print(f"classifier best_iteration={clf.best_iteration}")
@@ -70,6 +71,7 @@ def main():
         min_child_weight=5,
         eval_metric="mae",
         early_stopping_rounds=40,
+        random_state=42,
     )
     reg.fit(train[FEATURE_COLS], train["margin"], eval_set=[(X_val, val["margin"])], verbose=False)
     print(f"regressor best_iteration={reg.best_iteration}")

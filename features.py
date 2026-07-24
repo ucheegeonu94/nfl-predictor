@@ -7,9 +7,11 @@ knowable *before kickoff* (no leakage from the game's own result):
   - Elo ratings for each team going into the game (538-style, with margin-of-
     victory multiplier and home-field adjustment), updated sequentially through
     history.
-  - Rolling win% over each team's last 5 and 10 games.
+  - Rolling win% and points allowed over each team's last 5 and 10 games.
   - Rolling offensive/defensive EPA-per-play and success rate (from play-by-play
     data, see build_epa.py) over each team's last 5 and 10 games.
+  - Rolling penalty yards given (committed) and gained (drawn from the
+    opponent) over each team's last 5 and 10 games, from play-by-play data.
   - QB continuity: whether the starting QB changed from that team's last game,
     and the starter's career start count (experience proxy).
   - QB-specific Elo: a per-QB rating (EWMA of the team's offensive EPA/play in
@@ -82,20 +84,30 @@ def compute_elo(df):
 
 
 def compute_rolling_form(df):
-    """Rolling win% per team over last 5 and 10 games, computed only from
-    games strictly before the current one (shift(1))."""
+    """Rolling win% and points allowed per team over last 5 and 10 games,
+    computed only from games strictly before the current one (shift(1)).
+
+    Builds one row per (team, game) for *every* game, played or not -- an
+    unplayed game gets NaN for its own win/points_allowed, which
+    shift(1).rolling(...).mean() skips automatically. That's what makes a
+    team's rolling value correctly carry forward into its future games
+    instead of disappearing: if we only emitted rows for played games, a
+    future game's game_id would never appear in this table at all, and the
+    later merge back onto df would silently produce NaN -> fillna'd to a
+    neutral default for every future prediction. (This bit us for real: it
+    was true of every rolling feature here until this fix.)
+    """
     long_rows = []
     for _, row in df.iterrows():
-        if pd.isna(row["home_score"]) or pd.isna(row["away_score"]):
-            continue
-        long_rows.append({
-            "team": row["home_team"], "gameday": row["gameday"], "game_id": row["game_id"],
-            "win": 1.0 if row["home_score"] > row["away_score"] else (0.5 if row["home_score"] == row["away_score"] else 0.0),
-        })
-        long_rows.append({
-            "team": row["away_team"], "gameday": row["gameday"], "game_id": row["game_id"],
-            "win": 1.0 if row["away_score"] > row["home_score"] else (0.5 if row["home_score"] == row["away_score"] else 0.0),
-        })
+        played = pd.notna(row["home_score"]) and pd.notna(row["away_score"])
+        if played:
+            home_win = 1.0 if row["home_score"] > row["away_score"] else (0.5 if row["home_score"] == row["away_score"] else 0.0)
+            away_win = 1.0 if row["away_score"] > row["home_score"] else (0.5 if row["home_score"] == row["away_score"] else 0.0)
+            home_pa, away_pa = row["away_score"], row["home_score"]
+        else:
+            home_win = away_win = home_pa = away_pa = np.nan
+        long_rows.append({"team": row["home_team"], "gameday": row["gameday"], "game_id": row["game_id"], "win": home_win, "points_allowed": home_pa})
+        long_rows.append({"team": row["away_team"], "gameday": row["gameday"], "game_id": row["game_id"], "win": away_win, "points_allowed": away_pa})
     long_df = pd.DataFrame(long_rows).sort_values(["team", "gameday"])
 
     for window in (5, 10):
@@ -103,8 +115,12 @@ def compute_rolling_form(df):
             long_df.groupby("team")["win"]
             .transform(lambda s: s.shift(1).rolling(window, min_periods=1).mean())
         )
+        long_df[f"points_allowed_{window}"] = (
+            long_df.groupby("team")["points_allowed"]
+            .transform(lambda s: s.shift(1).rolling(window, min_periods=1).mean())
+        )
 
-    feat_cols = ["win_pct_5", "win_pct_10"]
+    feat_cols = ["win_pct_5", "win_pct_10", "points_allowed_5", "points_allowed_10"]
     home_feats = long_df[["game_id", "team"] + feat_cols].rename(
         columns={c: f"home_{c}" for c in feat_cols} | {"team": "home_team"}
     )
@@ -121,9 +137,22 @@ def compute_rolling_epa(df):
     """Rolling offensive/defensive EPA-per-play and success rate per team,
     over the last 5 and 10 games, computed from team_game_epa.csv (built by
     build_epa.py from play-by-play data). Shifted so the current game's own
-    play-by-play never leaks into its own features."""
-    epa = pd.read_csv(EPA_PATH)
-    epa = epa.merge(df[["game_id", "gameday"]], on="game_id", how="inner")
+    play-by-play never leaks into its own features.
+
+    One row per (team, game) for every game, played or not, with a *left*
+    join onto team_game_epa.csv (which only has played games) so unplayed
+    games get NaN and correctly carry forward the last real rolling value
+    -- see compute_rolling_form's docstring for why this matters."""
+    epa_hist = pd.read_csv(EPA_PATH)
+
+    long_rows = []
+    for _, row in df.iterrows():
+        long_rows.append({"team": row["home_team"], "gameday": row["gameday"], "game_id": row["game_id"]})
+        long_rows.append({"team": row["away_team"], "gameday": row["gameday"], "game_id": row["game_id"]})
+    epa = pd.DataFrame(long_rows).merge(
+        epa_hist[["game_id", "team", "off_epa_per_play", "def_epa_per_play", "off_success_rate", "def_success_rate"]],
+        on=["game_id", "team"], how="left",
+    )
     epa = epa.sort_values(["team", "gameday"])
 
     raw_cols = ["off_epa_per_play", "def_epa_per_play", "off_success_rate", "def_success_rate"]
@@ -142,6 +171,52 @@ def compute_rolling_epa(df):
         columns={c: f"home_{c}" for c in feat_cols} | {"team": "home_team"}
     )
     away_feats = epa[["game_id", "team"] + feat_cols].rename(
+        columns={c: f"away_{c}" for c in feat_cols} | {"team": "away_team"}
+    )
+
+    df = df.merge(home_feats, on=["game_id", "home_team"], how="left")
+    df = df.merge(away_feats, on=["game_id", "away_team"], how="left")
+    return df
+
+
+def compute_rolling_penalties(df):
+    """Rolling penalty yards given (committed by this team) and gained
+    (committed by the opponent, i.e. yards this team benefited from) per
+    team, over the last 5 and 10 games. Computed from team_game_epa.csv's
+    penalty_yards_committed column (built by build_epa.py from every
+    penalty on the play-by-play log, not just pass/run snaps).
+
+    One row per (team, game) for every game, played or not -- see
+    compute_rolling_form's docstring for why that's required for future
+    games to correctly carry forward a team's rolling value."""
+    pen_hist = pd.read_csv(EPA_PATH)[["game_id", "team", "penalty_yards_committed"]]
+
+    long_rows = []
+    for _, row in df.iterrows():
+        long_rows.append({"team": row["home_team"], "gameday": row["gameday"], "game_id": row["game_id"], "home_team": row["home_team"], "away_team": row["away_team"]})
+        long_rows.append({"team": row["away_team"], "gameday": row["gameday"], "game_id": row["game_id"], "home_team": row["home_team"], "away_team": row["away_team"]})
+    pen = pd.DataFrame(long_rows).merge(pen_hist, on=["game_id", "team"], how="left")
+    pen["opponent"] = np.where(pen["team"] == pen["home_team"], pen["away_team"], pen["home_team"])
+
+    drawn = pen[["game_id", "team", "penalty_yards_committed"]].rename(
+        columns={"team": "opponent", "penalty_yards_committed": "penalty_yards_gained"}
+    )
+    pen = pen.merge(drawn, on=["game_id", "opponent"], how="left")
+    pen = pen.rename(columns={"penalty_yards_committed": "penalty_yards_given"})
+    pen = pen.sort_values(["team", "gameday"])
+
+    for window in (5, 10):
+        for col in ("penalty_yards_given", "penalty_yards_gained"):
+            pen[f"{col}_{window}"] = (
+                pen.groupby("team")[col]
+                .transform(lambda s: s.shift(1).rolling(window, min_periods=1).mean())
+            )
+
+    feat_cols = ["penalty_yards_given_5", "penalty_yards_gained_5", "penalty_yards_given_10", "penalty_yards_gained_10"]
+    home_feats = pen[["game_id", "team"] + feat_cols].rename(
+        columns={c: f"home_{c}" for c in feat_cols} | {"team": "home_team"}
+    )
+    away_feats = pen[["game_id", "team"] + feat_cols].rename(
         columns={c: f"away_{c}" for c in feat_cols} | {"team": "away_team"}
     )
 
@@ -254,6 +329,7 @@ def build_features():
     df = compute_elo(df)
     df = compute_rolling_form(df)
     df = compute_rolling_epa(df)
+    df = compute_rolling_penalties(df)
     df = compute_qb_features(df)
     df = compute_qb_elo(df)
 
@@ -262,6 +338,11 @@ def build_features():
 
     for c in ["home_win_pct_5", "home_win_pct_10", "away_win_pct_5", "away_win_pct_10"]:
         df[c] = df[c].fillna(0.5)
+    for c in ["home_points_allowed_5", "home_points_allowed_10", "away_points_allowed_5", "away_points_allowed_10"]:
+        df[c] = df[c].fillna(df[c].mean())
+    penalty_cols = [c for c in df.columns if c.startswith(("home_penalty_yards_", "away_penalty_yards_"))]
+    for c in penalty_cols:
+        df[c] = df[c].fillna(df[c].mean())
     epa_epa_cols = [c for c in df.columns if c.endswith("_epa_per_play_5") or c.endswith("_epa_per_play_10")]
     for c in epa_epa_cols:
         df[c] = df[c].fillna(0.0)
@@ -302,6 +383,12 @@ FEATURE_COLS = [
     "home_qb_change", "away_qb_change",
     "home_qb_starts_career", "away_qb_starts_career",
     "home_qb_elo_pre", "away_qb_elo_pre", "qb_elo_diff",
+    "home_points_allowed_5", "away_points_allowed_5",
+    "home_points_allowed_10", "away_points_allowed_10",
+    "home_penalty_yards_given_5", "away_penalty_yards_given_5",
+    "home_penalty_yards_gained_5", "away_penalty_yards_gained_5",
+    "home_penalty_yards_given_10", "away_penalty_yards_given_10",
+    "home_penalty_yards_gained_10", "away_penalty_yards_gained_10",
     "rest_diff", "div_game", "week",
 ]
 

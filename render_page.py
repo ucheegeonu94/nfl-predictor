@@ -15,6 +15,7 @@ PREDICTIONS_PATH = "predictions.json"
 METRICS_PATH = "metrics.json"
 INJURIES_PATH = "injuries.json"
 WEATHER_PATH = "weather.json"
+RANKINGS_PATH = "team_rankings.json"
 OUTPUT_PATH = "nfl_predictions.html"
 
 
@@ -29,6 +30,8 @@ def main():
         injuries_json = f.read()
     with open(WEATHER_PATH) as f:
         weather_json = f.read()
+    with open(RANKINGS_PATH) as f:
+        rankings_json = f.read()
 
     generated_at = datetime.fromisoformat(metrics["generated_at"])
     generated_label = generated_at.strftime("%b %-d, %Y")
@@ -37,6 +40,7 @@ def main():
         "__DATA_JSON__": predictions_json,
         "__INJURIES_JSON__": injuries_json,
         "__WEATHER_JSON__": weather_json,
+        "__RANKINGS_JSON__": rankings_json,
         "__GENERATED_AT__": generated_label,
         "__VAL_ACC__": f"{metrics['validation']['model_accuracy'] * 100:.1f}",
         "__VAL_SEASON__": str(metrics["validation_season"]),

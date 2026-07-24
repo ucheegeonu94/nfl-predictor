@@ -46,11 +46,35 @@ pip install -r requirements.txt
      in games this specific QB started, rescaled onto an Elo-like number so it
      reads on the same footing as team Elo. New/unseen QBs start at a neutral
      1500 (no draft-pedigree prior, unlike 538's model) and drift from there.
+   - **Points allowed** (5/10-game rolling average) — the opponent's score in
+     each of a team's recent games.
+   - **Penalty yards given/gained** (5/10-game rolling average): yards a team
+     committed vs. yards its opponents committed (and thus it benefited from),
+     from every penalty on the play-by-play log (including penalties on
+     no-play snaps, which the EPA aggregation deliberately excludes).
    - **Rest-day differential**, **divisional-game flag**, **week of season**.
 
    All rolling stats are shifted (`shift(1)`) so a game's own outcome/plays
    never leak into its own features. Run with `python3 features.py` → writes
    `features.csv`.
+
+   **A real bug found and fixed while adding the two features above**: every
+   rolling feature (win%, EPA, points allowed, penalty yards) was computed by
+   building a lookup table from *played games only*, then joining it back onto
+   the full schedule by `game_id`. That works for historical games (their
+   `game_id` is in the lookup table) but silently fails for every future game
+   — its `game_id` was never in the played-games-only table, so the join
+   produced nothing and the neutral-default fallback (league-average win%,
+   zero EPA, etc.) quietly took over. **This affected every prediction for an
+   upcoming game ever published from this repo** — Elo, QB Elo, and QB
+   continuity were unaffected (they're computed differently) so predictions
+   weren't random, but they were missing real recent-form signal the whole
+   time. It did *not* affect training/validation/holdout accuracy numbers,
+   since those only use played games, which always joined correctly. Fixed by
+   building the lookup table from every game (played or not) with the current
+   game's own stat as `NaN` when unplayed — pandas' rolling mean skips `NaN`,
+   so a team's last real rolling value now correctly carries forward into all
+   of its future games instead of disappearing.
 
    **Limitation**: for future/unplayed games (e.g. next season's schedule
    before starters are known), `qb_change`, career starts, and QB Elo all
@@ -100,16 +124,25 @@ pip install -r requirements.txt
    exact stadium addresses, which is precise enough for day-ahead game weather.
    Writes `weather.json`.
 
-8. **`render_page.py`** — assembles `template.html` + `predictions.json` +
-   `metrics.json` + `injuries.json` + `weather.json` into the final static
-   page, `nfl_predictions.html`. Publish that file with the Artifact tool,
-   passing the existing artifact's URL so it updates in place. The accuracy
-   stat tiles and "Updated <date>" tag are pulled live from `metrics.json` at
-   render time — never hardcoded — so they can't drift out of sync with the
-   model that actually produced the predictions on the page. Tapping a team
-   on any game card opens a detail sheet with that team's starting QB
-   (name + Elo, flagged "(presumed starter)" when not yet officially
-   confirmed), injury report, and that game's weather.
+8. **`build_rankings.py`** — reduces `features.py`'s output to each team's
+   *current* rolling offensive/defensive EPA-per-play (every one of a team's
+   upcoming games carries the same value, since nothing new has been played
+   yet to move it — this just reads it off the earliest upcoming game per
+   team). Writes `team_rankings.json`, the data behind the "Team Efficiency
+   Rankings" sheet on the page.
+
+9. **`render_page.py`** — assembles `template.html` + `predictions.json` +
+   `metrics.json` + `injuries.json` + `weather.json` + `team_rankings.json`
+   into the final static page, `nfl_predictions.html`. Publish that file with
+   the Artifact tool, passing the existing artifact's URL so it updates in
+   place. The accuracy stat tiles and "Updated <date>" tag are pulled live
+   from `metrics.json` at render time — never hardcoded — so they can't drift
+   out of sync with the model that actually produced the predictions on the
+   page. Tapping a team on any game card opens a detail sheet with that
+   team's starting QB (name + Elo, flagged "(presumed starter)" when not yet
+   officially confirmed), injury report, and that game's weather; a button in
+   the header opens the league-wide efficiency rankings (offense/defense
+   toggle, sorted lowest-to-highest EPA/play).
 
 ### Full refresh, in order
 
@@ -120,37 +153,53 @@ python3 train.py           # writes metrics.json
 python3 predict.py         # writes predictions.json
 python3 build_injuries.py  # writes injuries.json (empty in the offseason)
 python3 build_weather.py   # writes weather.json
+python3 build_rankings.py  # writes team_rankings.json
 python3 render_page.py     # writes nfl_predictions.html
 ```
 Then publish `nfl_predictions.html` with the Artifact tool.
 
 ## Results (holdout test: 2025 season, n=284 games)
 
-| Metric | +QB Elo | EPA+QB (v2) | Point-diff (v1) | Home-field baseline | Vegas closing-line baseline |
-|---|---|---|---|---|---|
-| Accuracy (2024 val) | **70.2%** | 70.2% | 65.6% | 54.7% | 70.5% |
-| Accuracy (2025 test) | 64.1% | **65.5%** | 64.8% | 53.5% | 65.9% |
-| Log loss (2025 test) | 0.630 | 0.628 | 0.625 | — | — |
-| Margin MAE (2025 test) | 10.2 pts | 10.1 pts | 10.1 pts | — | — |
+| Metric | Current (+pts allowed, +penalties, bug fix, fixed seed) | +QB Elo | EPA+QB (v2) | Point-diff (v1) | Home-field baseline | Vegas closing-line baseline |
+|---|---|---|---|---|---|---|
+| Accuracy (2024 val) | 69.8% | 70.2% | 70.2% | 65.6% | 54.7% | 70.5% |
+| Accuracy (2025 test) | 63.4% | 64.1% | **65.5%** | 64.8% | 53.5% | 65.9% |
+| Log loss (2025 test) | 0.631 | 0.630 | 0.628 | 0.625 | — | — |
+| Margin MAE (2025 test) | 10.1 pts | 10.2 pts | 10.1 pts | 10.1 pts | — | — |
 
-**Reading this honestly**: swapping box-score point differential for play-by-play
-EPA efficiency (offense/defense split) plus QB-continuity signal pushed 2024
-validation accuracy to within 0.3pt of the Vegas closing line. Adding
-QB-specific Elo on top landed as the **#2 most important feature** (behind team
-Elo) and improved validation calibration (lower log loss/margin MAE), but 2025
-holdout accuracy dipped 1.4pt. With n=284, that's within the ~2.8pt standard
-error of a single holdout season — plausibly noise, not a real regression — but
-it's an honest mixed result, not an unambiguous win, and the EWMA's
-hyperparameters (`QB_ELO_ALPHA`, `QB_ELO_SCALE` in `features.py`) haven't been
-tuned. Beating Vegas consistently is still very hard (closing lines price in
-real-time injury news, weather, and sharp money this model doesn't see), but
-the gap has closed meaningfully versus the box-score-only (v1) version.
+**Reading this honestly, across the whole series**: swapping box-score point
+differential for play-by-play EPA efficiency plus QB-continuity (v1 → v2) was
+a clean win. Every addition since (QB Elo, then points-allowed + penalty
+yards) has nudged 2024 validation accuracy up while 2025 holdout accuracy
+drifted down — a real pattern worth naming honestly rather than one iteration
+that could be dismissed as noise. The most likely explanation is overfitting
+to the 285-game validation set via repeated early-stopping selection as the
+feature count grows, though a single 284-game holdout season is also
+genuinely noisy on its own (~2.8pt standard error). **`v2` (EPA + QB
+continuity, no QB Elo, no points-allowed/penalties) remains the best holdout
+number produced so far** — everything after it added real, legitimate,
+backtestable signal (confirmed non-trivial feature importance every time) but
+hasn't yet produced a model that beats it on the one number that matters most.
+The new features are still worth having in the model for the *reasons* the
+user asked for them (points allowed and penalty discipline are real,
+well-understood aspects of team performance), but this is flagged here rather
+than glossed over. `train.py` now sets `random_state=42` on both models so
+future comparisons are reproducible and this kind of before/after read is
+trustworthy going forward — it wasn't set previously, so some of the
+iteration-to-iteration swings reported earlier in this project's history may
+have included training-seed noise on top of genuine feature effects.
 
 ## Extending this
 
+- **Run an ablation, not just cumulative addition.** The results table above
+  only ever tested "current best + one more feature." Given the validation/
+  holdout divergence, the next real step is testing each new feature (QB Elo,
+  points allowed, penalties) in isolation against the v2 baseline, and
+  increasing regularization (`reg_lambda`, `max_depth`, `min_child_weight`) as
+  features are added, rather than always keeping everything from every past
+  addition.
 - Tune `QB_ELO_ALPHA`/`QB_ELO_SCALE` (currently 0.18/600, chosen by inspection
-  not a search) — given the mixed holdout result above, this is the most
-  likely lever to turn QB Elo into an unambiguous improvement.
+  not a search).
 - A draft-pedigree prior for rookie QBs (538 seeds by draft position instead of
   a flat 1500) would likely sharpen QB Elo in a player's first few starts.
 - Recalibrate probabilities (`CalibratedClassifierCV`) if you need well-calibrated

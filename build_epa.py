@@ -1,16 +1,20 @@
 """
 Download nflverse play-by-play data (1999-2025) and aggregate it down to
-team-game level offensive/defensive EPA-per-play and success rate.
+team-game level stats: offensive/defensive EPA-per-play, success rate, and
+penalty yards committed.
 
 This produces `team_game_epa.csv`: one row per (game_id, team) from that
-team's perspective, containing *that game's own* efficiency numbers. These
-are POST-game stats — features.py turns them into pre-game features by
-taking a rolling average of a team's past games (shifted so the current
-game is excluded), the same way it already does for win% and point diff.
+team's perspective, containing *that game's own* numbers. These are
+POST-game stats — features.py turns them into pre-game features by taking
+a rolling average of a team's past games (shifted so the current game is
+excluded), the same way it already does for win% and points allowed.
 
-Only pass/run plays with a non-null EPA are counted (excludes kneels,
-spikes, kickoffs, punts, penalties-with-no-play, etc.) so the numbers
-reflect meaningful offensive snaps.
+EPA/success rate only count pass/run plays with a non-null EPA (excludes
+kneels, spikes, kickoffs, punts, penalties-with-no-play, etc.) so the
+numbers reflect meaningful offensive snaps. Penalty yards are summed from
+every penalty on the play-by-play log regardless of play_type, since a lot
+of penalties occur on plays nflverse marks 'no_play' (the play itself was
+negated) which the EPA aggregation deliberately excludes.
 """
 
 import io
@@ -19,7 +23,8 @@ import pyarrow.parquet as pq
 import requests
 
 SEASONS = range(1999, 2026)
-COLS = ["game_id", "season", "week", "posteam", "defteam", "epa", "success", "play_type"]
+COLS = ["game_id", "season", "week", "posteam", "defteam", "epa", "success", "play_type",
+        "penalty", "penalty_team", "penalty_yards"]
 BASE_URL = "https://github.com/nflverse/nflverse-data/releases/download/pbp/play_by_play_{season}.parquet"
 
 
@@ -46,7 +51,17 @@ def aggregate_team_game(df):
         .reset_index()
         .rename(columns={"defteam": "team"})
     )
+    penalties = df[df["penalty"] == 1]
+    pen = (
+        penalties.groupby(["game_id", "penalty_team"])
+        .agg(penalty_yards_committed=("penalty_yards", "sum"))
+        .reset_index()
+        .rename(columns={"penalty_team": "team"})
+    )
+
     merged = off.merge(defn, on=["game_id", "team"], how="outer")
+    merged = merged.merge(pen, on=["game_id", "team"], how="outer")
+    merged["penalty_yards_committed"] = merged["penalty_yards_committed"].fillna(0.0)
     return merged
 
 

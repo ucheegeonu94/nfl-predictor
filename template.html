@@ -121,6 +121,15 @@
   }
   .chip.active { background: var(--accent); border-color: var(--accent); color: #ffffff; }
 
+  .rankings-btn {
+    max-width: 900px; margin: 12px auto 0 auto; display: block; width: 100%;
+    padding: 10px 14px; border-radius: 10px; border: 1px solid var(--border);
+    background: var(--surface); color: var(--ink); font-size: 13px; font-weight: 700;
+    cursor: pointer; text-align: left; font-family: inherit;
+  }
+  .rankings-btn:hover { background: var(--surface-2); }
+  .rankings-btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+
   main { max-width: 900px; margin: 0 auto; padding: 4px 16px 48px 16px; }
 
   .week-section { margin-top: 22px; }
@@ -248,6 +257,22 @@
   }
   .weather-tile .v { font-size: 17px; font-weight: 800; }
   .weather-tile .k { font-size: 9.5px; color: var(--ink-muted); font-weight: 700; text-transform: uppercase; letter-spacing: 0.03em; margin-top: 2px; }
+
+  .rank-list { display: flex; flex-direction: column; }
+  .rank-row {
+    display: grid; grid-template-columns: 20px 74px 1fr 62px; align-items: center; gap: 8px;
+    padding: 7px 0; border-bottom: 1px solid var(--border);
+  }
+  .rank-row:last-child { border-bottom: none; }
+  .rank-num { font-size: 11px; color: var(--ink-muted); font-weight: 700; }
+  .rank-team { font-size: 12.5px; font-weight: 800; display: flex; flex-direction: column; line-height: 1.25; }
+  .rank-team .rank-name { font-size: 9.5px; color: var(--ink-muted); font-weight: 600; }
+  .rank-val { font-size: 11.5px; font-weight: 700; text-align: right; color: var(--ink-secondary); }
+  .rank-bar { position: relative; height: 8px; background: var(--surface-2); border: 1px solid var(--border); border-radius: 999px; }
+  .rank-bar-fill { position: absolute; top: 0; bottom: 0; border-radius: 999px; }
+  .rank-bar-fill.home { background: var(--accent); }
+  .rank-bar-fill.away { background: var(--away); }
+  .rank-bar-mid { position: absolute; left: 50%; top: -2px; bottom: -2px; width: 1px; background: var(--border); }
 </style>
 
 <header class="top">
@@ -260,6 +285,7 @@
     <div class="stat-tile"><div class="v num">__HOLDOUT_ACC__%</div><div class="k">__HOLDOUT_SEASON__ Holdout Accuracy</div></div>
     <div class="stat-tile"><div class="v num">__VEGAS_ACC__%</div><div class="k">Vegas Benchmark</div></div>
   </div>
+  <button type="button" class="rankings-btn" id="rankings-btn">📊 Team Efficiency Rankings</button>
   <div class="weekbar" id="weekbar"></div>
 </header>
 
@@ -288,6 +314,7 @@
 
 <script id="game-data" type="application/json">__DATA_JSON__</script>
 <script id="injuries-data" type="application/json">__INJURIES_JSON__</script>
+<script id="rankings-data" type="application/json">__RANKINGS_JSON__</script>
 <script id="weather-data" type="application/json">__WEATHER_JSON__</script>
 <script>
 (function () {
@@ -308,6 +335,7 @@
 
   const INJURIES = JSON.parse(document.getElementById("injuries-data").textContent);
   const WEATHER = JSON.parse(document.getElementById("weather-data").textContent);
+  const RANKINGS = JSON.parse(document.getElementById("rankings-data").textContent).teams;
 
   const weeks = [...new Set(games.map(g => g.week))].sort((a, b) => a - b);
 
@@ -485,15 +513,29 @@
     return `<div class="note">Not available.</div>`;
   }
 
+  function showSheet(title, sub) {
+    document.getElementById('sheet-title').textContent = title;
+    document.getElementById('sheet-sub').textContent = sub;
+    document.getElementById('sheet').classList.add('open');
+    document.getElementById('sheet-backdrop').classList.add('open');
+    document.body.style.overflow = 'hidden';
+    lastFocused = document.activeElement;
+    document.getElementById('sheet-close').focus();
+  }
+
+  function closeSheet() {
+    document.getElementById('sheet').classList.remove('open');
+    document.getElementById('sheet-backdrop').classList.remove('open');
+    document.body.style.overflow = '';
+    if (lastFocused && lastFocused.focus) lastFocused.focus();
+  }
+
   function openSheet(team, gameId) {
     const g = gamesById[gameId];
     if (!g) return;
     const isHome = g.home_team === team;
     const oppTeam = isHome ? g.away_team : g.home_team;
     const relation = isHome ? 'vs' : 'at';
-
-    document.getElementById('sheet-title').textContent = `${team} — ${TEAM_NAMES[team] || ''}`;
-    document.getElementById('sheet-sub').textContent = `${weekLabel(g)} · ${relation} ${oppTeam}`;
 
     document.getElementById('sheet-body').innerHTML = `
       <div class="sheet-section">
@@ -511,19 +553,58 @@
         ${weatherSectionHTML(gameId)}
       </div>
     `;
-
-    document.getElementById('sheet').classList.add('open');
-    document.getElementById('sheet-backdrop').classList.add('open');
-    document.body.style.overflow = 'hidden';
-    lastFocused = document.activeElement;
-    document.getElementById('sheet-close').focus();
+    showSheet(`${team} — ${TEAM_NAMES[team] || ''}`, `${weekLabel(g)} · ${relation} ${oppTeam}`);
   }
 
-  function closeSheet() {
-    document.getElementById('sheet').classList.remove('open');
-    document.getElementById('sheet-backdrop').classList.remove('open');
-    document.body.style.overflow = '';
-    if (lastFocused && lastFocused.focus) lastFocused.focus();
+  // --- league efficiency rankings ---
+  const RANK_DOMAIN = 0.25; // fixed +/- EPA-per-play scale so offense and defense bars are visually comparable
+
+  function rankBarHTML(value) {
+    const pct = Math.max(-100, Math.min(100, (value / RANK_DOMAIN) * 100));
+    const side = pct >= 0 ? 'home' : 'away'; // reuse the accent/away roles from the win-prob bar
+    const width = Math.abs(pct) / 2; // half-track available on each side of center
+    const offset = pct >= 0 ? 50 : 50 - width;
+    return `
+      <div class="rank-bar">
+        <div class="rank-bar-fill ${side}" style="left:${offset}%; width:${width}%"></div>
+        <div class="rank-bar-mid"></div>
+      </div>`;
+  }
+
+  function rankingsListHTML(mode) {
+    const key = mode === 'offense' ? 'off_epa' : 'def_epa';
+    const sorted = [...RANKINGS].sort((a, b) => a[key] - b[key]);
+    if (!sorted.length) {
+      return `<div class="note">Rankings aren't available yet.</div>`;
+    }
+    return `
+      <div class="note" style="margin-bottom:10px;">
+        Sorted lowest to highest EPA/play. ${mode === 'offense' ? 'Higher is a better offense.' : 'Lower is a better defense (fewer expected points allowed per play).'}
+      </div>
+      <div class="rank-list">
+        ${sorted.map((t, i) => `
+          <div class="rank-row">
+            <span class="rank-num">${i + 1}</span>
+            <span class="rank-team">${t.team}<span class="rank-name">${TEAM_NAMES[t.team] || ''}</span></span>
+            ${rankBarHTML(t[key])}
+            <span class="rank-val num">${t[key] >= 0 ? '+' : ''}${t[key].toFixed(3)}</span>
+          </div>`).join('')}
+      </div>`;
+  }
+
+  function openRankings(mode) {
+    document.getElementById('sheet-body').innerHTML = `
+      <div class="sheet-section" style="margin-top:0;">
+        <div class="weekbar" style="margin:0 0 4px 0; padding-bottom:4px;" id="rank-toggle">
+          <button type="button" class="chip${mode === 'offense' ? ' active' : ''}" data-mode="offense">Offense</button>
+          <button type="button" class="chip${mode === 'defense' ? ' active' : ''}" data-mode="defense">Defense</button>
+        </div>
+        <div id="rank-list-wrap">${rankingsListHTML(mode)}</div>
+      </div>`;
+    document.getElementById('rank-toggle').querySelectorAll('.chip').forEach(btn => {
+      btn.addEventListener('click', () => openRankings(btn.dataset.mode));
+    });
+    showSheet('Team Efficiency Rankings', 'Updated weekly from play-by-play EPA per play');
   }
 
   document.getElementById('main').addEventListener('click', (e) => {
@@ -531,6 +612,7 @@
     if (!btn) return;
     openSheet(btn.dataset.team, btn.dataset.gameId);
   });
+  document.getElementById('rankings-btn').addEventListener('click', () => openRankings('offense'));
   document.getElementById('sheet-backdrop').addEventListener('click', closeSheet);
   document.getElementById('sheet-close').addEventListener('click', closeSheet);
   document.addEventListener('keydown', (e) => {
